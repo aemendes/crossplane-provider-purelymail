@@ -1,0 +1,145 @@
+name: Build
+
+# Every push and pull request: build, vet, test, and check for known vulnerabilities.
+# Pushes to main (and manual runs) then push the runtime image + xpkg to GHCR with the
+# job's GITHUB_TOKEN and, if configured, ask GitOps repositories to pin the new digest
+# (repository_dispatch `pin-package`). Pull requests never see secrets or push anything.
+#
+# Every third-party action and tool is pinned to an exact commit/version.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NAME: provider-purelymail
+  CROSSPLANE_CLI_VERSION: v2.5.0
+  CRANE_VERSION: v0.22.1
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build, vet, and test
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./...
+
+      - name: Check for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  release:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Push to ghcr.io/<owner>/${NAME}*. Each package must grant this repository
+      # Write access (package settings -> Manage Actions access).
+      packages: write
+    env:
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to ghcr.io
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${TOKEN}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Install crossplane CLI and crane
+        run: |
+          base="https://cli.crossplane.io/stable/${CROSSPLANE_CLI_VERSION}/bin/linux_amd64"
+          curl -fsSLo crossplane "${base}/crossplane"
+          echo "$(curl -fsSL "${base}/crossplane.sha256" | cut -d' ' -f1)  crossplane" | sha256sum -c -
+          sudo install -m 0755 crossplane /usr/local/bin/crossplane && rm crossplane
+          go install "github.com/google/go-containerregistry/cmd/crane@${CRANE_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build and push runtime image
+        run: |
+          SHORT_TAG="main-$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          # GHCR links a package to the repo through org.opencontainers.image.source; for an
+          # OCI manifest it reads the manifest annotation, not the config label.
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            -t "${REGISTRY}/${NAME}:${SHORT_TAG}" \
+            --annotation "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --annotation "org.opencontainers.image.licenses=Apache-2.0" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.licenses=Apache-2.0" \
+            --label "org.opencontainers.image.description=Runtime image for ${NAME}" \
+            --push \
+            --metadata-file /tmp/image-metadata.json \
+            .
+          IMAGE_DIGEST=$(jq -r '."containerimage.digest"' /tmp/image-metadata.json)
+          echo "IMAGE_REF=${REGISTRY}/${NAME}@${IMAGE_DIGEST}" >> "$GITHUB_ENV"
+
+      - name: Build and push xpkg
+        run: |
+          PKG_TAG="v0.1.${GITHUB_RUN_NUMBER}"
+          PKG_IMAGE="${REGISTRY}/${NAME}-pkg"
+          docker pull --platform linux/amd64 "${IMAGE_REF}"
+          crossplane xpkg build --package-root=package \
+            --embed-runtime-image="${IMAGE_REF}" \
+            -o "${NAME}.xpkg"
+          crossplane xpkg push -f "${NAME}.xpkg" "${PKG_IMAGE}:${PKG_TAG}"
+          # The crossplane CLI can't set labels; rewrite the config with crane so GHCR links
+          # the package to this repo, and report the relabelled digest.
+          crane mutate \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.licenses=Apache-2.0" \
+            --label "org.opencontainers.image.description=Crossplane provider ${NAME}" \
+            -t "${PKG_IMAGE}:${PKG_TAG}" "${PKG_IMAGE}:${PKG_TAG}"
+          PKG_DIGEST=$(crane digest "${PKG_IMAGE}:${PKG_TAG}")
+          echo "PKG_IMAGE=${PKG_IMAGE}" >> "$GITHUB_ENV"
+          echo "PKG_REF=${PKG_IMAGE}@${PKG_DIGEST}" >> "$GITHUB_ENV"
+          echo "### ${NAME} ${PKG_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${PKG_IMAGE}@${PKG_DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # Optional: notify GitOps repositories (space-separated owner/repo list in the
+      # PIN_PACKAGE_REPOS variable). PIN_DISPATCH_TOKEN must be a fine-grained token with
+      # Contents: Read and write on exactly those repositories.
+      - name: Ask GitOps repositories to pin the new package
+        env:
+          REPOS: ${{ vars.PIN_PACKAGE_REPOS }}
+          DISPATCH_TOKEN: ${{ secrets.PIN_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "${REPOS}" ] || [ -z "${DISPATCH_TOKEN}" ]; then
+            echo "PIN_PACKAGE_REPOS / PIN_DISPATCH_TOKEN not set; pin ${PKG_REF} manually."
+            exit 0
+          fi
+          payload=$(jq -nc --arg image "${PKG_IMAGE}" --arg ref "${PKG_REF}" \
+            '{event_type: "pin-package", client_payload: {image: $image, ref: $ref}}')
+          for repo in ${REPOS}; do
+            curl -fsS -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${DISPATCH_TOKEN}" \
+              "https://api.github.com/repos/${repo}/dispatches" -d "${payload}"
+            echo "Dispatched pin-package for ${PKG_REF} to ${repo}"
+          done

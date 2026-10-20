@@ -1,0 +1,13 @@
+apiVersion: mail.purelymail.crossplane.io/v1alpha1
+kind: PurelymailRoutingRule
+metadata:
+  name: sales-to-alice
+spec:
+  forProvider:
+    domainName: example.com
+    matchUser: sales
+    targetAddresses:
+      - alice@example.com
+    catchall: false
+  providerConfigRef:
+    name: default

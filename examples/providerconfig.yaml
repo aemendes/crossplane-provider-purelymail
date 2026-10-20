@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: purelymail-creds
+  namespace: crossplane-system
+type: Opaque
+stringData:
+  credentials: REPLACE_WITH_PURELYMAIL_API_TOKEN
+---
+apiVersion: purelymail.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: default
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: purelymail-creds
+      key: credentials

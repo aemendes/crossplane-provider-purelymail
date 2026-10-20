@@ -1,0 +1,11 @@
+apiVersion: meta.pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-purelymail
+  annotations:
+    meta.crossplane.io/maintainer: Alexandre Mendes
+    meta.crossplane.io/source: github.com/aemendes/crossplane-provider-purelymail
+    meta.crossplane.io/description: |
+      Native Go Crossplane provider for PurelyMail, managing PurelymailDomain,
+      PurelymailUser, and PurelymailRoutingRule resources directly against the
+      PurelyMail REST API.

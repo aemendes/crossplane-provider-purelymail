@@ -1,0 +1,21 @@
+# Before applying this resource, the domain's ownership TXT record must
+# already be published — PurelyMail rejects addDomain otherwise. Fetch the
+# account-level ownership code once via the API (there is no CLI/UI shortcut
+# baked into this provider for it, see Client.GetOwnershipCode):
+#
+#   curl -s -X POST https://purelymail.com/api/v0/getOwnershipCode \
+#     -H "Purelymail-Api-Token: $PURELYMAIL_API_TOKEN" -d '{}'
+#
+# then publish it as a TXT record at the domain apex before creating this
+# resource — see PurelyMail's own docs for the exact record name/format.
+apiVersion: mail.purelymail.crossplane.io/v1alpha1
+kind: PurelymailDomain
+metadata:
+  name: example-com
+spec:
+  forProvider:
+    domainName: example.com
+    allowAccountReset: true
+    symbolicSubaddressing: true
+  providerConfigRef:
+    name: default

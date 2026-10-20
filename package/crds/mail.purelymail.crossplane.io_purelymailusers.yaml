@@ -1,0 +1,452 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: purelymailusers.mail.purelymail.crossplane.io
+spec:
+  group: mail.purelymail.crossplane.io
+  names:
+    categories:
+    - crossplane
+    - managed
+    - purelymail
+    kind: PurelymailUser
+    listKind: PurelymailUserList
+    plural: purelymailusers
+    singular: purelymailuser
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: SYNCED
+      type: string
+    - jsonPath: .spec.forProvider.domainName
+      name: DOMAIN
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          A PurelymailUser is a managed resource representing a PurelyMail mailbox.
+          Named "PurelymailUser" rather than "User" to avoid colliding with the many
+          other CRDs in a typical cluster that also pluralize to "users" — see the
+          provider README's "Kind naming" note (same precedent as
+          provider-cloudflare-access's AccessApplication).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: A UserSpec defines the desired state of a PurelymailUser.
+            properties:
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy specifies what will happen to the underlying external
+                  when this managed resource is deleted - either "Delete" or "Orphan" the
+                  external resource.
+                  This field is planned to be deprecated in favor of the ManagementPolicies
+                  field in a future release. Currently, both could be set independently and
+                  non-default values would be honored if the feature flag is enabled.
+                  See the design doc for more information: https://github.com/crossplane/crossplane/blob/499895a25d1a1a0ba1604944ef98ac7a1a71f197/design/design-doc-observe-only-resources.md?plain=1#L223
+                enum:
+                - Orphan
+                - Delete
+                type: string
+              forProvider:
+                description: |-
+                  UserParameters define the desired state of a PurelyMail user (mailbox).
+
+                  PurelyMail's own API is asymmetric about how a user is addressed: createUser
+                  takes a split userName (local part) + domainName, while every other operation
+                  (getUser, modifyUser, deleteUser) takes the full "local@domain" address as a
+                  single userName field. This provider stores the split form in spec (mirroring
+                  createUser) and derives the full address internally wherever the other
+                  operations need it; the full address is also used as this resource's
+                  external-name.
+                properties:
+                  domainName:
+                    description: |-
+                      DomainName is the domain this user belongs to, e.g. "example.com". Must
+                      already exist as a PurelymailDomain (or otherwise be registered with
+                      PurelyMail). Immutable for the same reason as Username.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: domainName is immutable
+                      rule: self == oldSelf
+                  enablePasswordReset:
+                    description: |-
+                      EnablePasswordReset allows the user to reset their own password via a
+                      configured recovery method. Write-only: PurelyMail's getUser does not
+                      return this field, so it cannot be observed or diffed after creation.
+                    type: boolean
+                  enableSearchIndexing:
+                    description: |-
+                      EnableSearchIndexing controls whether this mailbox's contents are
+                      indexed for search. Unlike most other optional fields here, PurelyMail's
+                      getUser *does* return this, so it is observed and kept in sync by Update.
+                    type: boolean
+                  passwordSecretRef:
+                    description: |-
+                      PasswordSecretRef selects the Secret key holding this user's password.
+                      Required at creation. PurelyMail never echoes a user's password back on a
+                      read (getUser does not return it), so this provider cannot detect drift
+                      between the Secret's current value and what PurelyMail actually has
+                      stored — password changes here are only applied at Create time. Rotate by
+                      deleting and recreating the resource (or by rotating directly against the
+                      PurelyMail API/web UI, out of band of this provider).
+                    properties:
+                      key:
+                        description: The key to select.
+                        type: string
+                      name:
+                        description: Name of the secret.
+                        type: string
+                      namespace:
+                        description: Namespace of the secret.
+                        type: string
+                    required:
+                    - key
+                    - name
+                    - namespace
+                    type: object
+                  recoveryEmail:
+                    description: |-
+                      RecoveryEmail is an out-of-band email address usable for account recovery.
+                      Write-only, same caveat as EnablePasswordReset.
+                    type: string
+                  recoveryEmailDescription:
+                    description: |-
+                      RecoveryEmailDescription is a human-readable label for RecoveryEmail.
+                      Write-only, same caveat as EnablePasswordReset.
+                    type: string
+                  recoveryPhone:
+                    description: |-
+                      RecoveryPhone is an out-of-band phone number usable for account recovery.
+                      Write-only, same caveat as EnablePasswordReset.
+                    type: string
+                  recoveryPhoneDescription:
+                    description: |-
+                      RecoveryPhoneDescription is a human-readable label for RecoveryPhone.
+                      Write-only, same caveat as EnablePasswordReset.
+                    type: string
+                  requireTwoFactorAuthentication:
+                    description: |-
+                      RequireTwoFactorAuthentication forces this user to configure 2FA.
+                      Settable via modifyUser (not createUser) and returned by getUser, so it
+                      is observed and kept in sync by Update the same as EnableSearchIndexing.
+                    type: boolean
+                  sendWelcomeEmail:
+                    description: |-
+                      SendWelcomeEmail controls whether PurelyMail sends a welcome email when
+                      this user is created. Applies only at creation time; there is no
+                      equivalent modify field, so this cannot be changed or observed afterward.
+                    type: boolean
+                  username:
+                    description: |-
+                      Username is the local part of the mailbox address, e.g. "alice" for
+                      "alice@example.com". Immutable — PurelyMail does support renaming a user
+                      via modifyUser's newUserName, but this provider does not wire that up in
+                      v1 to keep the resource model simple (delete/recreate instead).
+                    type: string
+                    x-kubernetes-validations:
+                    - message: username is immutable
+                      rule: self == oldSelf
+                required:
+                - domainName
+                - passwordSecretRef
+                - username
+                type: object
+              managementPolicies:
+                default:
+                - '*'
+                description: |-
+                  THIS IS A BETA FIELD. It is on by default but can be opted out
+                  through a Crossplane feature flag.
+                  ManagementPolicies specify the array of actions Crossplane is allowed to
+                  take on the managed and external resources.
+                  This field is planned to replace the DeletionPolicy field in a future
+                  release. Currently, both could be set independently and non-default
+                  values would be honored if the feature flag is enabled. If both are
+                  custom, the DeletionPolicy field will be ignored.
+                  See the design doc for more information: https://github.com/crossplane/crossplane/blob/499895a25d1a1a0ba1604944ef98ac7a1a71f197/design/design-doc-observe-only-resources.md?plain=1#L223
+                  and this one: https://github.com/crossplane/crossplane/blob/444267e84783136daa93568b364a5f01228cacbe/design/one-pager-ignore-changes.md
+                items:
+                  description: |-
+                    A ManagementAction represents an action that the Crossplane controllers
+                    can take on an external resource.
+                  enum:
+                  - Observe
+                  - Create
+                  - Update
+                  - Delete
+                  - LateInitialize
+                  - '*'
+                  type: string
+                type: array
+              providerConfigRef:
+                default:
+                  name: default
+                description: |-
+                  ProviderConfigReference specifies how the provider that will be used to
+                  create, observe, update, and delete this managed resource should be
+                  configured.
+                properties:
+                  name:
+                    description: Name of the referenced object.
+                    type: string
+                  policy:
+                    description: Policies for referencing.
+                    properties:
+                      resolution:
+                        default: Required
+                        description: |-
+                          Resolution specifies whether resolution of this reference is required.
+                          The default is 'Required', which means the reconcile will fail if the
+                          reference cannot be resolved. 'Optional' means this reference will be
+                          a no-op if it cannot be resolved.
+                        enum:
+                        - Required
+                        - Optional
+                        type: string
+                      resolve:
+                        description: |-
+                          Resolve specifies when this reference should be resolved. The default
+                          is 'IfNotPresent', which will attempt to resolve the reference only when
+                          the corresponding field is not present. Use 'Always' to resolve the
+                          reference on every reconcile.
+                        enum:
+                        - Always
+                        - IfNotPresent
+                        type: string
+                    type: object
+                required:
+                - name
+                type: object
+              publishConnectionDetailsTo:
+                description: |-
+                  PublishConnectionDetailsTo specifies the connection secret config which
+                  contains a name, metadata and a reference to secret store config to
+                  which any connection details for this managed resource should be written.
+                  Connection details frequently include the endpoint, username,
+                  and password required to connect to the managed resource.
+                properties:
+                  configRef:
+                    default:
+                      name: default
+                    description: |-
+                      SecretStoreConfigRef specifies which secret store config should be used
+                      for this ConnectionSecret.
+                    properties:
+                      name:
+                        description: Name of the referenced object.
+                        type: string
+                      policy:
+                        description: Policies for referencing.
+                        properties:
+                          resolution:
+                            default: Required
+                            description: |-
+                              Resolution specifies whether resolution of this reference is required.
+                              The default is 'Required', which means the reconcile will fail if the
+                              reference cannot be resolved. 'Optional' means this reference will be
+                              a no-op if it cannot be resolved.
+                            enum:
+                            - Required
+                            - Optional
+                            type: string
+                          resolve:
+                            description: |-
+                              Resolve specifies when this reference should be resolved. The default
+                              is 'IfNotPresent', which will attempt to resolve the reference only when
+                              the corresponding field is not present. Use 'Always' to resolve the
+                              reference on every reconcile.
+                            enum:
+                            - Always
+                            - IfNotPresent
+                            type: string
+                        type: object
+                    required:
+                    - name
+                    type: object
+                  metadata:
+                    description: Metadata is the metadata for connection secret.
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          Annotations are the annotations to be added to connection secret.
+                          - For Kubernetes secrets, this will be used as "metadata.annotations".
+                          - It is up to Secret Store implementation for others store types.
+                        type: object
+                      labels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          Labels are the labels/tags to be added to connection secret.
+                          - For Kubernetes secrets, this will be used as "metadata.labels".
+                          - It is up to Secret Store implementation for others store types.
+                        type: object
+                      type:
+                        description: |-
+                          Type is the SecretType for the connection secret.
+                          - Only valid for Kubernetes Secret Stores.
+                        type: string
+                    type: object
+                  name:
+                    description: Name is the name of the connection secret.
+                    type: string
+                required:
+                - name
+                type: object
+              writeConnectionSecretToRef:
+                description: |-
+                  WriteConnectionSecretToReference specifies the namespace and name of a
+                  Secret to which any connection details for this managed resource should
+                  be written. Connection details frequently include the endpoint, username,
+                  and password required to connect to the managed resource.
+                  This field is planned to be replaced in a future release in favor of
+                  PublishConnectionDetailsTo. Currently, both could be set independently
+                  and connection details would be published to both without affecting
+                  each other.
+                properties:
+                  name:
+                    description: Name of the secret.
+                    type: string
+                  namespace:
+                    description: Namespace of the secret.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+            required:
+            - forProvider
+            type: object
+          status:
+            description: A UserStatus reflects the observed state of a PurelymailUser.
+            properties:
+              atProvider:
+                description: UserObservation reflects the observed state of a PurelyMail
+                  user.
+                properties:
+                  enableSpamFiltering:
+                    description: |-
+                      EnableSpamFiltering reflects whether spam filtering is active for this
+                      user. Read-only in this version of the PurelyMail API — there is no known
+                      operation that sets it.
+                    type: boolean
+                  recoveryEnabled:
+                    description: |-
+                      RecoveryEnabled is true if account recovery is currently possible for this
+                      user. Read-only: PurelyMail derives it from configured reset methods.
+                    type: boolean
+                  resetMethods:
+                    description: |-
+                      ResetMethods lists the account-recovery methods PurelyMail has on file
+                      for this user.
+                    items:
+                      description: ResetMethod is one configured account-recovery
+                        method for a PurelyMail user.
+                      properties:
+                        allowMfaReset:
+                          description: AllowMfaReset is true if this method can also
+                            be used to reset 2FA.
+                          type: boolean
+                        description:
+                          description: Description is the human-readable label configured
+                            for this method.
+                          type: string
+                        target:
+                          description: Target is the recovery address/number itself.
+                          type: string
+                        type:
+                          description: Type of reset method, e.g. "email" or "phone".
+                          type: string
+                      type: object
+                    type: array
+                type: object
+              conditions:
+                description: Conditions of the resource.
+                items:
+                  description: A Condition that may apply to a resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        LastTransitionTime is the last time this condition transitioned from one
+                        status to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        A Message containing details about this condition's last transition from
+                        one status to another, if any.
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      type: integer
+                    reason:
+                      description: A Reason for this condition's last transition from
+                        one status to another.
+                      type: string
+                    status:
+                      description: Status of this condition; is it currently True,
+                        False, or Unknown?
+                      type: string
+                    type:
+                      description: |-
+                        Type of this condition. At most one of each condition type may apply to
+                        a resource at any point in time.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the latest metadata.generation
+                  which resulted in either a ready state, or stalled due to error
+                  it can not recover from without human intervention.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
